@@ -209,6 +209,9 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not await guard(update):
         return
     message = update.effective_message
+    if not ALLOWED_USERS:
+        await message.reply_text("Remote scan dinonaktifkan. Atur TELEGRAM_ALLOWED_USER_IDS terlebih dahulu agar hanya operator yang diizinkan dapat memicu workflow.")
+        return
     if not context.args:
         await message.reply_text("Format: /scan <domain>")
         return
