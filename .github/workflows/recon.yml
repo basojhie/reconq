@@ -10,11 +10,16 @@ on:
         type: choice
         options: [recon, baseline]
       baseline:
-        description: Initialize state without sending alerts
+        description: Initialize state without alerts
         required: true
         default: 'false'
         type: choice
         options: ['false', 'true']
+      target:
+        description: Optional single in-scope domain; blank scans all configured scope roots
+        required: false
+        default: ''
+        type: string
   schedule:
     - cron: '17 2 * * *'
 
@@ -30,36 +35,44 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      GO_VERSION: '1.24.2'
       RECON_MODE: ${{ github.event.inputs.mode || 'recon' }}
       BASELINE: ${{ github.event.inputs.baseline || 'false' }}
+      RECON_TARGET: ${{ github.event.inputs.target || '' }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Restore state branch
-        continue-on-error: true
+      - name: Restore persistent state
+        id: state-restore
         run: |
-          git fetch origin state:refs/remotes/origin/state || true
-          if git show-ref --verify --quiet refs/remotes/origin/state; then
-            mkdir -p state
-            git archive origin/state | tar -x -C state
+          set -euo pipefail
+          mkdir -p artifacts state
+          if git ls-remote --exit-code origin refs/heads/state >/dev/null 2>&1; then
+            git fetch origin refs/heads/state:refs/remotes/origin/state
+            git show refs/remotes/origin/state:subs_known.txt > state/subs_known.txt || true
+            git show refs/remotes/origin/state:initialized > state/initialized || true
+          fi
+          if [ -s state/initialized ]; then
+            echo 'first_run=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'first_run=true' >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: '1.24.2'
           cache: false
 
       - name: Install pinned passive tools
         run: |
           set -euo pipefail
           go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@v2.6.8
-          go install github.com/projectdiscovery/httpx/cmd/httpx@v1.6.10
           go install github.com/projectdiscovery/dnsx/cmd/dnsx@v1.2.1
+          go install github.com/projectdiscovery/httpx/cmd/httpx@v1.6.10
+          go install github.com/tomnomnom/anew@v0.1.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Restore optional Subfinder provider config
@@ -72,10 +85,20 @@ jobs:
             chmod 600 "$HOME/.config/subfinder/provider-config.yaml"
           fi
 
-      - name: Validate explicit authorized scope
+      - name: Validate and select authorized scope
         run: |
-          mkdir -p artifacts state
+          set -euo pipefail
           python3 scripts/validate_scope.py scope/scope.txt artifacts/scope-roots.txt
+          if [ -n "$RECON_TARGET" ]; then
+            target="$(printf '%s' "$RECON_TARGET" | tr '[:upper:]' '[:lower:]' | sed 's/\.$//')"
+            printf '%s\n' "$target" > artifacts/requested-target.txt
+            python3 scripts/validate_scope.py artifacts/requested-target.txt artifacts/selected-roots.txt
+            grep -Fxq "$target" artifacts/selected-roots.txt || { echo 'Requested target is outside authorized scope or excluded.'; exit 1; }
+            mv artifacts/selected-roots.txt artifacts/scan-roots.txt
+          else
+            cp artifacts/scope-roots.txt artifacts/scan-roots.txt
+          fi
+          test -s artifacts/scan-roots.txt || { echo 'No authorized root domains selected.'; exit 1; }
 
       - name: Passive subdomain discovery
         run: |
@@ -85,52 +108,53 @@ jobs:
             [ -z "$root" ] && continue
             subfinder -d "$root" -silent -o "artifacts/subs-${root}.txt"
             cat "artifacts/subs-${root}.txt" >> artifacts/subs.txt
-          done < artifacts/scope-roots.txt
+          done < artifacts/scan-roots.txt
           sort -fu artifacts/subs.txt -o artifacts/subs.txt
           python3 scripts/validate_scope.py artifacts/subs.txt artifacts/subs_scoped.txt
           mv artifacts/subs_scoped.txt artifacts/subs.txt
 
-      - name: Resolve DNS candidates
+      - name: Resolve DNS for discovered hosts
         run: |
           set -euo pipefail
           if [ -s artifacts/subs.txt ]; then
-            dnsx -l artifacts/subs.txt -silent -a -aaaa -resp-only -o artifacts/resolved.txt
-            sort -fu artifacts/resolved.txt -o artifacts/resolved.txt
+            dnsx -l artifacts/subs.txt -silent -a -aaaa -json -o artifacts/dnsx.jsonl
+            jq -r 'def nonempty: if type == "array" then length > 0 else . != null and . != "" end; select((.a // [] | nonempty) or (.aaaa // [] | nonempty)) | (.host // .input // empty)' artifacts/dnsx.jsonl | sort -fu > artifacts/resolved.txt
           else
+            : > artifacts/dnsx.jsonl
             : > artifacts/resolved.txt
           fi
           python3 scripts/validate_scope.py artifacts/resolved.txt artifacts/resolved_scoped.txt
           mv artifacts/resolved_scoped.txt artifacts/resolved.txt
 
-      - name: Compute asset delta and baseline
+      - name: Compute asset delta and initialize baseline
         id: asset-diff
         run: |
           set -euo pipefail
           touch state/subs_known.txt
           sort -fu state/subs_known.txt -o state/subs_known.txt
           sort -fu artifacts/resolved.txt -o artifacts/resolved.txt
-          comm -13 state/subs_known.txt artifacts/resolved.txt > artifacts/subs_new.txt
-          cat artifacts/resolved.txt state/subs_known.txt | sort -fu > state/subs_known.next
-          mv state/subs_known.next state/subs_known.txt
-          if [ "$BASELINE" = 'true' ] || [ "$RECON_MODE" = 'baseline' ]; then
+          if [ "$BASELINE" = 'true' ] || [ "$RECON_MODE" = 'baseline' ] || [ '${{ steps.state-restore.outputs.first_run }}' = 'true' ]; then
+            cat artifacts/resolved.txt | anew state/subs_known.txt >/dev/null
             : > artifacts/subs_new.txt
             echo 'baseline=true' >> "$GITHUB_OUTPUT"
           else
+            cat artifacts/resolved.txt | anew state/subs_known.txt > artifacts/subs_new.txt
             echo 'baseline=false' >> "$GITHUB_OUTPUT"
           fi
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > state/initialized
 
-      - name: Probe in-scope web services
+      - name: Probe authorized web hosts
         run: |
           set -euo pipefail
           if [ -s artifacts/resolved.txt ]; then
-            httpx -l artifacts/resolved.txt -silent -json -status-code -title -tech-detect -no-color -o artifacts/httpx.jsonl
+            httpx -l artifacts/resolved.txt -silent -json -status-code -title -tech-detect -no-color -rl 2 -threads 5 -timeout 5 -retries 1 -o artifacts/httpx.jsonl
             jq -r 'select(.url != null) | .url' artifacts/httpx.jsonl | sort -u > artifacts/alive.txt
           else
             : > artifacts/httpx.jsonl
             : > artifacts/alive.txt
           fi
 
-      - name: Build report
+      - name: Build report and package evidence
         run: |
           python3 scripts/build_summary.py
           tar -czf reconq-artifacts.tar.gz artifacts state
@@ -151,25 +175,37 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          BASELINE: ${{ steps.asset-diff.outputs.baseline }}
+          BASELINE_RESULT: ${{ steps.asset-diff.outputs.baseline }}
         run: |
           set -euo pipefail
-          [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || { echo 'Telegram secrets missing; skipping'; exit 0; }
-          SUMMARY="$(cat artifacts/telegram-summary.txt 2>/dev/null || printf 'ReconQ run completed; see GitHub artifacts.')"
-          [ "$BASELINE" != 'true' ] || SUMMARY='ReconQ baseline initialized; notifications suppressed.'
+          [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || { echo 'Telegram secrets missing; skipping notification.'; exit 0; }
+          SUMMARY="$(cat artifacts/telegram-summary.txt 2>/dev/null || printf 'ReconQ workflow ended; inspect GitHub Actions for details.')"
+          [ "$BASELINE_RESULT" != 'true' ] || SUMMARY='ReconQ baseline initialized; notification of new assets suppressed.'
           jq -n --arg chat "$TELEGRAM_CHAT_ID" --arg text "$SUMMARY\n\nRun: $RUN_URL" '{chat_id:$chat,text:$text,disable_web_page_preview:true}' > payload.json
           curl --fail --silent --show-error --max-time 15 -H 'Content-Type: application/json' -d @payload.json "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" | jq -e '.ok == true' >/dev/null
 
-      - name: Persist state to dedicated branch
+      - name: Persist state to dedicated state branch
         if: success()
         env:
           GH_TOKEN: ${{ secrets.RECONQ_STATE_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "$GH_TOKEN" ]; then echo 'RECONQ_STATE_TOKEN missing; state remains only in artifact'; exit 0; fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" state || true
-          git add state/subs_known.txt
-          git commit -m 'chore(state): update ReconQ asset baseline' || exit 0
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:state
+          if [ -z "$GH_TOKEN" ]; then
+            echo 'RECONQ_STATE_TOKEN missing; state remains in the workflow artifact only.'
+            exit 0
+          fi
+          STATE_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          STATE_REPO="$(mktemp -d)"
+          git init --initial-branch=state "$STATE_REPO"
+          git -C "$STATE_REPO" config user.name 'github-actions[bot]'
+          git -C "$STATE_REPO" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code "$STATE_URL" refs/heads/state >/dev/null 2>&1; then
+            git -C "$STATE_REPO" fetch "$STATE_URL" refs/heads/state
+            git -C "$STATE_REPO" reset --hard FETCH_HEAD
+          fi
+          cp "$GITHUB_WORKSPACE/state/subs_known.txt" "$STATE_REPO/subs_known.txt"
+          cp "$GITHUB_WORKSPACE/state/initialized" "$STATE_REPO/initialized"
+          git -C "$STATE_REPO" add subs_known.txt initialized
+          if git -C "$STATE_REPO" diff --cached --quiet; then echo 'State unchanged.'; exit 0; fi
+          git -C "$STATE_REPO" commit -m 'chore(state): update ReconQ asset baseline'
+          git -C "$STATE_REPO" push "$STATE_URL" HEAD:refs/heads/state
