@@ -31,6 +31,9 @@ def read_domains(path: str) -> list[str]:
 def within(host: str, roots: list[str]) -> bool:
     return any(host == root or host.endswith("." + root) for root in roots)
 
+def in_authorized_scope(host: str, roots: list[str], exclusions: list[str]) -> bool:
+    return within(host, roots) and not within(host, exclusions)
+
 def filter_assets(candidates: list[str], roots: list[str], exclusions: list[str]) -> list[str]:
     return sorted({
         host.rstrip(".").lower()
