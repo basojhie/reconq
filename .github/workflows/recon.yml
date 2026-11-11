@@ -110,7 +110,7 @@ jobs:
             cat "artifacts/subs-${root}.txt" >> artifacts/subs.txt
           done < artifacts/scan-roots.txt
           sort -fu artifacts/subs.txt -o artifacts/subs.txt
-          python3 scripts/validate_scope.py artifacts/subs.txt artifacts/subs_scoped.txt
+          python3 scripts/validate_scope.py artifacts/subs.txt artifacts/subs_scoped.txt artifacts/scan-roots.txt
           mv artifacts/subs_scoped.txt artifacts/subs.txt
 
       - name: Resolve DNS for discovered hosts
@@ -123,7 +123,7 @@ jobs:
             : > artifacts/dnsx.jsonl
             : > artifacts/resolved.txt
           fi
-          python3 scripts/validate_scope.py artifacts/resolved.txt artifacts/resolved_scoped.txt
+          python3 scripts/validate_scope.py artifacts/resolved.txt artifacts/resolved_scoped.txt artifacts/scan-roots.txt
           mv artifacts/resolved_scoped.txt artifacts/resolved.txt
 
       - name: Compute asset delta and initialize baseline
@@ -171,6 +171,7 @@ jobs:
 
       - name: Send Telegram report
         if: always()
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
