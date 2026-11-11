@@ -6,9 +6,10 @@ Telegram bot for **authorized, passive-only domain reconnaissance**.
 
 - Telegram commands: `/start`, `/help`, `/status`, `/recon <domain>`
 - Passive DNS metadata: A, AAAA, MX, NS and TXT
-- One HTTPS metadata request (no crawling, exploitation, brute force, or port scanning)
-- Optional Telegram user-ID allowlist
-- Input validation, bounded timeouts, structured logging and error handling
+- One HTTPS HEAD request for response metadata (no page body download)
+- Skips HTTPS when DNS resolves to private, reserved, or otherwise non-public addresses
+- Per-user cooldown and optional Telegram user-ID allowlist
+- Input validation, bounded timeouts, logging and error handling
 
 ## Setup
 
@@ -24,6 +25,7 @@ cp .env.example .env
 Set `TELEGRAM_BOT_TOKEN` in `.env` using a newly generated token from @BotFather.
 Never commit `.env` or share the token. Optionally set
 `TELEGRAM_ALLOWED_USER_IDS=123456789,987654321` to restrict bot users.
+Set `RECON_COOLDOWN_SECONDS` to control the per-user cooldown (default: 30).
 
 Run:
 
@@ -38,20 +40,25 @@ python bot.py
 - `/status` — process status
 - `/recon example.com` — passive DNS and HTTPS metadata lookup
 
-Only scan domains you own or are explicitly authorized to assess. DNS and HTTP
-metadata can still disclose information and generate network requests. Respect
-the target owner's scope and rate limits.
+Only assess domains you own or are explicitly authorized to assess. Respect the
+owner's scope and rate limits. The bot intentionally avoids port scanning,
+service enumeration, crawling, brute force, exploitation, and bypass methods.
 
-## Security notes
+## Tests
 
-- Rotate any bot token that has ever been committed or exposed.
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q bot.py tests
+pip check
+```
+
+## Security and deployment notes
+
+- Rotate any bot token that has ever been committed or exposed. Removing a token
+  from the current file does not remove it from Git history.
 - Keep `.env` private and use environment secrets in hosted deployments.
 - Configure the Telegram user-ID allowlist for private deployments.
-- This project intentionally does not implement active port scanning, service
-  probing, vulnerability exploitation, or bypass techniques.
-
-## Deployment
-
-Keep the existing host/process manager and its current polling deployment. Update
-the installed dependencies and environment variables, then restart the existing
-bot process. Do not run two polling instances with the same bot token.
+- Run only one polling instance for a given bot token. When updating an existing
+  host, pull the latest `main`, install requirements, and restart the existing
+  process manager. GitHub Actions validates code; it does not deploy or restart
+  the running Telegram process.
