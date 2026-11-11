@@ -99,6 +99,8 @@ jobs:
           else
             : > artifacts/resolved.txt
           fi
+          python3 scripts/validate_scope.py artifacts/resolved.txt artifacts/resolved_scoped.txt
+          mv artifacts/resolved_scoped.txt artifacts/resolved.txt
 
       - name: Compute asset delta and baseline
         id: asset-diff
