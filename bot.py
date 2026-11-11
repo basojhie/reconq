@@ -10,11 +10,12 @@ import ipaddress
 import logging
 import os
 import re
+import socket
+import ssl
 import time
 from urllib.parse import urlparse
 
 import dns.resolver
-import httpx
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -38,7 +39,6 @@ try:
     RECON_COOLDOWN_SECONDS = max(5, int(os.getenv("RECON_COOLDOWN_SECONDS", "30")))
 except ValueError:
     RECON_COOLDOWN_SECONDS = 30
-REQUEST_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$"
 )
@@ -83,6 +83,79 @@ def normalize_domain(raw: str) -> str:
         raise ValueError("Domain lokal atau domain khusus tidak diizinkan.")
     return host
 
+
+
+def fetch_https_head(domain: str) -> tuple[int, dict[str, str]]:
+    """Send HEAD to a pinned public IP while validating TLS for the domain.
+
+    The IP is resolved once, checked before connection, and used directly so
+    the HTTP client cannot perform a second DNS lookup to a different address.
+    """
+    addresses = socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)
+    endpoints = []
+    for family, socktype, proto, _, sockaddr in addresses:
+        address = ipaddress.ip_address(sockaddr[0])
+        if not address.is_global:
+            raise ValueError("Resolver koneksi mengembalikan alamat non-publik.")
+        endpoints.append((family, socktype, proto, sockaddr))
+
+    if not endpoints:
+        raise OSError("Tidak ada alamat publik untuk koneksi HTTPS.")
+
+    last_error: Exception | None = None
+    for family, socktype, proto, sockaddr in endpoints[:8]:
+        try:
+            with socket.socket(family, socktype, proto) as raw_socket:
+                raw_socket.settimeout(4.0)
+                raw_socket.connect(sockaddr)
+
+                peer = ipaddress.ip_address(raw_socket.getpeername()[0])
+                if not peer.is_global:
+                    raise ValueError("Peer HTTPS bukan alamat publik.")
+
+                context = ssl.create_default_context()
+                with context.wrap_socket(
+                    raw_socket, server_hostname=domain
+                ) as tls_socket:
+                    tls_socket.settimeout(4.0)
+                    request = (
+                        f"HEAD / HTTP/1.1\r\n"
+                        f"Host: {domain}\r\n"
+                        "User-Agent: ReconQ/1.1 (passive metadata check)\r\n"
+                        "Connection: close\r\n\r\n"
+                    )
+                    tls_socket.sendall(request.encode("ascii"))
+
+                    with tls_socket.makefile("rb") as response:
+                        status_line = response.readline(2048)
+                        parts = status_line.split()
+                        if len(parts) < 2 or not parts[1].isdigit():
+                            raise OSError("Respons HTTP tidak valid.")
+                        status_code = int(parts[1])
+
+                        headers: dict[str, str] = {}
+                        header_bytes = 0
+                        while True:
+                            line = response.readline(4096)
+                            if not line or line in (b"\r\n", b"\n"):
+                                break
+                            header_bytes += len(line)
+                            if header_bytes > 16384:
+                                raise OSError("Header HTTP melebihi batas.")
+                            name, separator, value = line.partition(b":")
+                            if separator:
+                                key = name.decode("ascii", "ignore").strip().lower()
+                                if key in {"server", "content-type", "location"}:
+                                    headers[key] = value.decode(
+                                        "latin-1", "replace"
+                                    ).strip()
+                        return status_code, headers
+        except ValueError:
+            raise
+        except (OSError, ssl.SSLError, TimeoutError) as exc:
+            last_error = exc
+
+    raise OSError(f"Koneksi HTTPS gagal: {last_error}")
 
 def authorized(update: Update) -> bool:
     """Optional allowlist; when configured, only listed Telegram user IDs can run commands."""
@@ -218,23 +291,23 @@ async def recon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         report.extend(["", "HTTPS: dilewati (alamat publik A/AAAA tidak ditemukan)"])
     else:
         try:
-            async with httpx.AsyncClient(
-                timeout=REQUEST_TIMEOUT,
-                follow_redirects=False,
-                trust_env=False,
-                headers={"User-Agent": "ReconQ/1.1 (passive metadata check)"},
-            ) as client:
-                response = await client.head(f"https://{domain}/")
+            status_code, headers = await asyncio.wait_for(
+                asyncio.to_thread(fetch_https_head, domain),
+                timeout=12.0,
+            )
             report.extend(
                 [
                     "",
-                    f"HTTPS: HTTP {response.status_code}",
-                    f"Server: {response.headers.get('server', 'tidak diungkap')}",
-                    f"Content-Type: {response.headers.get('content-type', 'tidak diungkap')}",
-                    f"Redirect: {response.headers.get('location', 'tidak ada')}",
+                    f"HTTPS: HTTP {status_code}",
+                    f"Server: {headers.get('server', 'tidak diungkap')}",
+                    f"Content-Type: {headers.get('content-type', 'tidak diungkap')}",
+                    f"Redirect: {headers.get('location', 'tidak ada')}",
                 ]
             )
-        except httpx.HTTPError as exc:
+        except ValueError:
+            logger.warning("Blocked non-public HTTPS resolution for %s", domain)
+            report.extend(["", "HTTPS: dilewati (alamat non-publik terdeteksi saat koneksi)"])
+        except (OSError, ssl.SSLError, TimeoutError) as exc:
             logger.info("HTTPS metadata request for %s failed: %s", domain, exc)
             report.extend(["", "HTTPS: tidak dapat diakses/timeout"])
 
