@@ -1,8 +1,10 @@
 # ReconQ — Roadmap-driven ASM
 
 ReconQ integrates a Telegram command bot with a scope-gated GitHub Actions workflow.
-The current workflow performs passive subdomain discovery, DNS resolution, HTTP
-metadata probing, state diffing, artifact packaging and optional Telegram reporting.
+The current workflow performs passive subdomain discovery, structured DNS resolution,
+HTTP metadata probing, first-run baseline seeding, persistent asset diffing, artifact
+packaging and optional Telegram reporting. An optional target input restricts a run
+to one host within the explicit allowlist.
 
 ## Roadmap alignment
 
@@ -30,7 +32,7 @@ Configure repository Actions secrets:
 
 - `TELEGRAM_BOT_TOKEN`: Telegram bot token used by the workflow report step.
 - `TELEGRAM_CHAT_ID`: destination chat/channel ID.
-- `RECONQ_STATE_TOKEN`: dedicated least-privilege token with Contents read/write on this repository, required to persist `state/subs_known.txt` to the `state` branch.
+- `RECONQ_STATE_TOKEN`: dedicated least-privilege token with Contents read/write on this repository, required to persist `subs_known.txt` and `initialized` to the dedicated `state` branch.
 - `SUBFINDER_CONFIG_B64`: optional Base64-encoded Subfinder provider config. Avoid storing unnecessary provider credentials.
 
 The workflow uses `GITHUB_TOKEN` with read-only contents permission for checkout/artifacts; the dedicated state token is used only for the state-branch push.
@@ -64,20 +66,20 @@ export GITHUB_TOKEN='YOUR_GITHUB_TOKEN'
 ```
 
 To persist settings, place exports in a private shell profile or use a local ignored
-configuration file. Do not commit tokens. Commands: `./reconq baseline`,
-`./reconq recon`, `./reconq last`, `./reconq status RUN_ID`.
+configuration file. Do not commit tokens. Commands: `./reconq baseline`, `./reconq recon example.com` (or `./reconq recon` to
+scan all configured roots), `./reconq last`, `./reconq status RUN_ID`.
 
 ## Workflow behavior
 
 1. Validate non-empty authorized scope.
 2. Discover subdomains passively with Subfinder.
 3. Filter discovered hosts to the authorized roots and exclusions.
-4. Resolve A/AAAA using dnsx.
-5. Diff against state; baseline mode suppresses deltas and notifications.
+4. Resolve A/AAAA using dnsx and keep resolved hostnames (not IP literals) as HTTP targets.
+5. Automatically seed the first persistent state as a quiet baseline; later runs use `anew` to compute asset deltas. Explicit baseline mode also suppresses new-asset alerts.
 6. Probe in-scope resolved hosts with HTTPx JSON output.
 7. Build compact reports and upload artifacts (14-day retention).
 8. Send optional Telegram summary.
-9. Persist known assets to `state` branch only when `RECONQ_STATE_TOKEN` exists.
+9. Persist only the two state files to the dedicated `state` branch when `RECONQ_STATE_TOKEN` exists. Without that secret, the run artifact contains the state but a later run cannot restore it.
 
 GitHub Actions does not deploy or restart the long-running Telegram bot process.
 
