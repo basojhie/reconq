@@ -45,7 +45,7 @@ jobs:
           fetch-depth: 0
 
       - name: Restore persistent state
-        id: state-restore
+        id: state_restore
         run: |
           set -euo pipefail
           mkdir -p artifacts state
@@ -127,13 +127,13 @@ jobs:
           mv artifacts/resolved_scoped.txt artifacts/resolved.txt
 
       - name: Compute asset delta and initialize baseline
-        id: asset-diff
+        id: asset_diff
         run: |
           set -euo pipefail
           touch state/subs_known.txt
           sort -fu state/subs_known.txt -o state/subs_known.txt
           sort -fu artifacts/resolved.txt -o artifacts/resolved.txt
-          if [ "$BASELINE" = 'true' ] || [ "$RECON_MODE" = 'baseline' ] || [ '${{ steps.state-restore.outputs.first_run }}' = 'true' ]; then
+          if [ "$BASELINE" = 'true' ] || [ "$RECON_MODE" = 'baseline' ] || [ '${{ steps.state_restore.outputs.first_run }}' = 'true' ]; then
             cat artifacts/resolved.txt | anew state/subs_known.txt >/dev/null
             : > artifacts/subs_new.txt
             echo 'baseline=true' >> "$GITHUB_OUTPUT"
@@ -175,7 +175,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          BASELINE_RESULT: ${{ steps.asset-diff.outputs.baseline }}
+          BASELINE_RESULT: ${{ steps.asset_diff.outputs.baseline }}
         run: |
           set -euo pipefail
           [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] || { echo 'Telegram secrets missing; skipping notification.'; exit 0; }
