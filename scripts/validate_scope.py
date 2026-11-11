@@ -43,7 +43,8 @@ def filter_assets(candidates: list[str], roots: list[str], exclusions: list[str]
     })
 
 def main() -> int:
-    roots = read_domains("scope/scope.txt")
+    roots_path = sys.argv[3] if len(sys.argv) > 3 else "scope/scope.txt"
+    roots = read_domains(roots_path)
     exclusions = read_domains("scope/out-of-scope.txt")
     if not roots:
         print("ERROR: scope/scope.txt is empty; add explicitly authorized root domains.", file=sys.stderr)

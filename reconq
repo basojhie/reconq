@@ -17,14 +17,14 @@ api() {
     -H "Authorization: Bearer ${GITHUB_TOKEN}" \
     -H "X-GitHub-Api-Version: 2022-11-28" "$@"
 }
-usage() { echo "Usage: reconq {menu|baseline|full|recon|status|last}"; }
+usage() { echo "Usage: reconq {menu|baseline [domain]|recon [domain]|last|status RUN_ID}"; }
 trigger() {
-  local mode="$1" baseline="false"
+  local mode="$1" baseline="false" target="${2:-}"
   [[ "$mode" == "baseline" ]] && baseline="true"
   config
   api -X POST "${API}/actions/workflows/${WORKFLOW}/dispatches" \
-    -d "$(jq -nc --arg ref main --arg mode "$mode" --arg baseline "$baseline" \
-      '{ref:$ref,inputs:{mode:$mode,baseline:$baseline}}')"
+    -d "$(jq -nc --arg ref main --arg mode "$mode" --arg baseline "$baseline" --arg target "$target" \
+      '{ref:$ref,inputs:{mode:$mode,baseline:$baseline,target:$target}}')"
   echo "Workflow requested: mode=${mode}, baseline=${baseline}"
 }
 list_runs() {
@@ -55,8 +55,8 @@ menu() {
 }
 case "${1:-menu}" in
   menu) menu;;
-  baseline) trigger baseline;;
-  full|recon) trigger recon;;
+  baseline) trigger baseline "${2:-}";;
+  full|recon) trigger recon "${2:-}";;
   status) status_run "${2:-}";;
   last) list_runs;;
   *) usage; exit 1;;

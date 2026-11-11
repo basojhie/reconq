@@ -1,5 +1,5 @@
 import unittest
-from scripts.validate_scope import within, in_authorized_scope
+from scripts.validate_scope import within, in_authorized_scope, filter_assets
 
 class ScopeTests(unittest.TestCase):
     def test_root_and_subdomain_allowed(self):
@@ -17,6 +17,14 @@ class ScopeTests(unittest.TestCase):
 
     def test_allowed_host_not_excluded(self):
         self.assertTrue(in_authorized_scope("api.example.com", ["example.com"], ["vendor.example.com"]))
+
+    def test_filter_applies_target_roots_and_exclusions(self):
+        got = filter_assets(
+            ["api.example.com", "a.vendor.example.com", "sibling.example.com", "notexample.com"],
+            ["api.example.com"],
+            ["vendor.example.com"],
+        )
+        self.assertEqual(got, ["api.example.com"])
 
 if __name__ == "__main__":
     unittest.main()
