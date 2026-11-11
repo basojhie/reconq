@@ -4,7 +4,7 @@ ReconQ integrates a Telegram command bot with a scope-gated GitHub Actions workf
 The current workflow performs passive subdomain discovery, structured DNS resolution,
 HTTP metadata probing, first-run baseline seeding, persistent asset diffing, artifact
 packaging and optional Telegram reporting. An optional target input restricts a run
-to one host within the explicit allowlist.
+to that host and its descendants within the explicit allowlist.
 
 ## Roadmap alignment
 
@@ -41,7 +41,7 @@ The workflow uses `GITHUB_TOKEN` with read-only contents permission for checkout
 
 Set `TELEGRAM_BOT_TOKEN`. Optional:
 
-- `TELEGRAM_ALLOWED_USER_IDS`: comma-separated numeric Telegram user IDs.
+- `TELEGRAM_ALLOWED_USER_IDS`: comma-separated numeric Telegram user IDs. Required before `/scan` can trigger cloud runs.
 - `GITHUB_TOKEN`: token with permission to dispatch workflows and read workflow runs; used for `/scan` and `/last`.
 - `GITHUB_OWNER`, `GITHUB_REPO`: default `basojhie/reconq`.
 
