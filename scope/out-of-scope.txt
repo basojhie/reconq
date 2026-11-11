@@ -1,0 +1,2 @@
+# Exact domains or subdomains to exclude, one per line.
+# Exclusions take precedence over scope/scope.txt.
