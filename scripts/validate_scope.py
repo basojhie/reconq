@@ -39,8 +39,7 @@ def filter_assets(candidates: list[str], roots: list[str], exclusions: list[str]
         host.rstrip(".").lower()
         for host in candidates
         if DOMAIN.fullmatch(host.rstrip(".").lower())
-        and within(host.rstrip(".").lower(), roots)
-        and not within(host.rstrip(".").lower(), exclusions)
+        and in_authorized_scope(host.rstrip(".").lower(), roots, exclusions)
     })
 
 def main() -> int:
