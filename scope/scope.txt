@@ -1,0 +1,3 @@
+# Explicit authorized root domains, one per line.
+# Replace this example with domains you own or are formally authorized to assess.
+# Empty/comment-only scope intentionally causes the scan workflow to stop.
