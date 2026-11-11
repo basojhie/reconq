@@ -57,7 +57,7 @@ def normalize_domain(raw: str) -> str:
         raise ValueError("Gunakan nama domain, bukan alamat IP.")
     if not DOMAIN_RE.fullmatch(host):
         raise ValueError("Target harus berupa nama domain publik yang valid.")
-    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".test", ".invalid")):
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal", ".test", ".invalid", ".example")):
         raise ValueError("Domain lokal tidak diizinkan.")
     return host
 
