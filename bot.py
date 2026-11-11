@@ -34,10 +34,13 @@ ALLOWED_USERS = {
     for item in os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").split(",")
     if item.strip()
 }
-RECON_COOLDOWN_SECONDS = max(5, int(os.getenv("RECON_COOLDOWN_SECONDS", "30")))
+try:
+    RECON_COOLDOWN_SECONDS = max(5, int(os.getenv("RECON_COOLDOWN_SECONDS", "30")))
+except ValueError:
+    RECON_COOLDOWN_SECONDS = 30
 REQUEST_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
 DOMAIN_RE = re.compile(
-    r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+[a-zA-Z]{2,63}$"
+    r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$"
 )
 
 
@@ -62,12 +65,15 @@ def normalize_domain(raw: str) -> str:
         raise ValueError("Nama domain tidak ditemukan.")
     try:
         host = host.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise ValueError("Nama domain tidak valid.") from exc
+
+    try:
         ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
         raise ValueError("Gunakan nama domain, bukan alamat IP.")
-    except ValueError as exc:
-        if str(exc) == "Gunakan nama domain, bukan alamat IP.":
-            raise
-        # A normal domain is not an IP address; continue with DNS-name validation.
 
     if not DOMAIN_RE.fullmatch(host):
         raise ValueError("Target harus berupa nama domain publik yang valid.")
@@ -100,7 +106,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await guard(update):
         return
     await update.effective_message.reply_text(
-        "Halo! Saya ReconQ.\\nGunakan /help untuk melihat perintah.\\n"
+        "Halo! Saya ReconQ.\nGunakan /help untuk melihat perintah.\n"
         "ReconQ hanya melakukan pemeriksaan pasif pada domain yang Anda miliki "
         "atau memiliki izin tertulis untuk diuji."
     )
@@ -110,12 +116,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not await guard(update):
         return
     await update.effective_message.reply_text(
-        "Perintah ReconQ:\\n"
-        "/start - Mulai bot\\n"
-        "/help - Bantuan\\n"
-        "/status - Status bot\\n"
-        "/recon <domain> - Pemeriksaan DNS dan metadata HTTPS pasif\\n\\n"
-        "Contoh: /recon example.com\\n"
+        "Perintah ReconQ:\n"
+        "/start - Mulai bot\n"
+        "/help - Bantuan\n"
+        "/status - Status bot\n"
+        "/recon <domain> - Pemeriksaan DNS dan metadata HTTPS pasif\n\n"
+        "Contoh: /recon example.com\n"
         "Gunakan hanya pada domain milik sendiri atau yang memiliki izin."
     )
 
@@ -134,7 +140,7 @@ async def recon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not context.args:
         await message.reply_text(
-            "Format: /recon <domain>\\nContoh: /recon example.com"
+            "Format: /recon <domain>\nContoh: /recon example.com"
         )
         return
 
@@ -162,7 +168,7 @@ async def recon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     last_runs[user.id] = now
 
     await message.reply_text(
-        f"Memeriksa metadata pasif untuk {domain}.\\n"
+        f"Memeriksa metadata pasif untuk {domain}.\n"
         "Pastikan Anda memiliki otorisasi atas domain ini..."
     )
 
@@ -191,9 +197,13 @@ async def recon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                         f"{record}: resolusi non-publik terdeteksi; alamat disembunyikan"
                     )
                 else:
-                    report.append(f"{record}: " + (", ".join(values[:8]) or "tidak tersedia"))
+                    report.append(
+                        f"{record}: " + (", ".join(values[:8]) or "tidak tersedia")
+                    )
             else:
-                report.append(f"{record}: " + (", ".join(values[:8]) or "tidak tersedia"))
+                report.append(
+                    f"{record}: " + (", ".join(values[:8]) or "tidak tersedia")
+                )
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
             report.append(f"{record}: tidak tersedia")
         except Exception as exc:
@@ -228,7 +238,7 @@ async def recon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info("HTTPS metadata request for %s failed: %s", domain, exc)
             report.extend(["", "HTTPS: tidak dapat diakses/timeout"])
 
-    await message.reply_text("\\n".join(report)[:3900])
+    await message.reply_text("\n".join(report)[:3900])
 
 
 async def error_handler(
