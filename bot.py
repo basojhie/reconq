@@ -245,7 +245,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         response = await client.post(
             f"{base}/actions/workflows/recon.yml/dispatches",
-            json={"ref": "main", "inputs": {"mode": "recon", "baseline": "false"}},
+            json={"ref": "main", "inputs": {"mode": "recon", "baseline": "false", "target": domain}},
         )
         if response.status_code not in (204, 200):
             await message.reply_text(f"GitHub dispatch gagal: HTTP {response.status_code}")
